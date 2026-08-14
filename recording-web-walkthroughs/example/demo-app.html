@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orbit — Issue Tracker</title>
+<style>
+  :root { --line:#e4e4e7; --muted:#71717a; --accent:#e5484d; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 ui-sans-serif,system-ui,-apple-system,sans-serif; color:#18181b; }
+  header { display:flex; align-items:center; gap:10px; padding:14px 24px; border-bottom:1px solid var(--line); }
+  .dot { width:10px; height:10px; background:var(--accent); }
+  h1 { font-size:15px; margin:0; letter-spacing:-.01em; }
+  main { padding:24px; max-width:900px; }
+  h2 { font-size:22px; margin:0 0 4px; letter-spacing:-.02em; }
+  p.sub { color:var(--muted); margin:0 0 20px; }
+  .bar { display:flex; gap:10px; margin-bottom:16px; }
+  input,select { padding:8px 10px; border:1px solid var(--line); font:inherit; background:#fff; }
+  input { flex:1; }
+  button { padding:8px 16px; border:0; background:#18181b; color:#fff; font:500 14px inherit; cursor:pointer; }
+  button:hover { background:#3f3f46; }
+  table { width:100%; border-collapse:collapse; border:1px solid var(--line); }
+  th { text-align:left; font:600 11px ui-monospace,monospace; text-transform:uppercase;
+       letter-spacing:.06em; color:var(--muted); padding:10px 14px; border-bottom:1px solid var(--line); }
+  td { padding:11px 14px; border-bottom:1px solid var(--line); }
+  tr:hover td { background:#fafafa; }
+  .pill { display:inline-block; padding:2px 8px; font:600 11px ui-monospace,monospace; }
+  .open { background:#fef3c7; color:#92400e; }
+  .done { background:#dcfce7; color:#166534; }
+  dialog { border:1px solid var(--line); padding:0; width:420px; }
+  dialog::backdrop { background:rgba(0,0,0,.45); }
+  .dlg-h { padding:14px 18px; border-bottom:1px solid var(--line); font-weight:600; }
+  .dlg-b { padding:18px; display:flex; flex-direction:column; gap:12px; }
+  .dlg-f { padding:14px 18px; border-top:1px solid var(--line); display:flex; justify-content:flex-end; gap:10px; }
+  .ghost { background:#fff; color:#18181b; border:1px solid var(--line); }
+  label { font-size:12px; color:var(--muted); display:block; margin-bottom:4px; }
+</style>
+</head>
+<body>
+<header><span class="dot"></span><h1>ORBIT</h1></header>
+<main>
+  <h2>Issues</h2>
+  <p class="sub">Everything open across the workspace.</p>
+
+  <div class="bar">
+    <input id="q" placeholder="Filter issues by title">
+    <select id="state">
+      <option value="">All states</option>
+      <option value="open">Open</option>
+      <option value="done">Done</option>
+    </select>
+    <button id="new">New issue</button>
+  </div>
+
+  <table>
+    <thead><tr><th>Title</th><th>Owner</th><th>State</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</main>
+
+<dialog id="dlg">
+  <div class="dlg-h">Create issue</div>
+  <div class="dlg-b">
+    <div><label>Title</label><input id="t" style="width:100%" placeholder="Short summary"></div>
+    <div><label>Owner</label><input id="o" style="width:100%" placeholder="Who owns it"></div>
+  </div>
+  <div class="dlg-f">
+    <button class="ghost" id="cancel">Cancel</button>
+    <button id="create">Create</button>
+  </div>
+</dialog>
+
+<script>
+  const seed = [
+    ['Flaky checkout retry','Dana','open'], ['Stale cache on profile','Ravi','done'],
+    ['Webhook 500 on replay','Mira','open'], ['Slow search on large orgs','Tom','open'],
+    ['Broken avatar upload','Ana','done'], ['Timezone drift in reports','Kenji','open'],
+    ['Duplicate invoice emails','Lena','done'], ['Rate limit not surfaced','Omar','open'],
+    ['Session expiry loop','Priya','open'], ['CSV export truncates','Iris','done'],
+    ['Dark mode contrast','Nils','open'], ['Missing audit entries','Sofia','open'],
+  ];
+  let items = seed.map(([title, owner, state]) => ({ title, owner, state }));
+  const rows = document.getElementById('rows');
+  const render = () => {
+    const q = document.getElementById('q').value.toLowerCase();
+    const st = document.getElementById('state').value;
+    rows.innerHTML = items
+      .filter(i => i.title.toLowerCase().includes(q) && (!st || i.state === st))
+      .map(i => `<tr><td>${i.title}</td><td>${i.owner}</td>`
+        + `<td><span class="pill ${i.state}">${i.state.toUpperCase()}</span></td></tr>`)
+      .join('') || '<tr><td colspan="3" style="color:#a1a1aa">No issues match.</td></tr>';
+  };
+  document.getElementById('q').addEventListener('input', render);
+  document.getElementById('state').addEventListener('change', render);
+  const dlg = document.getElementById('dlg');
+  document.getElementById('new').onclick = () => dlg.showModal();
+  document.getElementById('cancel').onclick = () => dlg.close();
+  document.getElementById('create').onclick = () => {
+    const title = document.getElementById('t').value.trim();
+    const owner = document.getElementById('o').value.trim();
+    if (title) items.unshift({ title, owner: owner || 'Unassigned', state: 'open' });
+    document.getElementById('t').value = ''; document.getElementById('o').value = '';
+    dlg.close(); render();
+  };
+  render();
+</script>
+</body>
+</html>

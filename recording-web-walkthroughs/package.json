@@ -1,0 +1,8 @@
+{
+  "name": "recording-web-walkthroughs",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "bin": { "walkthrough": "./run.mjs" },
+  "dependencies": { "playwright": "^1.62.0" }
+}

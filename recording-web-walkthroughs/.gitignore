@@ -1,0 +1,15 @@
+# dependencies
+node_modules/
+
+# intermediates from --keep (also lands beside --out)
+.walkthrough/
+
+# rendered media — all regenerable:
+#   node run.mjs example/demo.storyboard.mjs --out example/demo.mp4
+*.mp4
+*.webm
+*.m4a
+*.aiff
+
+# macOS
+.DS_Store
