@@ -178,6 +178,8 @@ Every row cost real time to find.
 | `SYSTEM_ALERT_WINDOW` on a store listing | Expo's prebuild template writes it into the **main** manifest, so it merges into release. It is *not* React Native's dev menu — RN dropped that requirement in 2017 | `"blockedPermissions": ["android.permission.SYSTEM_ALERT_WINDOW"]`. RN's `src/debug` manifest re-declares it at higher priority, so the dev menu is unaffected |
 | Testers never see the app | A non-Google email on the tester list, silently | Every tester needs a Google account |
 | Store listing shows a permission nobody added | A dependency bump pulled it in | The permission diff gate. This is why a baseline is recorded |
+| Play warns "no deobfuscation file associated with this App Bundle" and it is unclear whether that matters | Play shows it on **every** bundle without a mapping, and cannot tell "R8 never ran" (benign, and the Expo/RN default) from "R8 ran, map not shipped" (crash reports permanently unreadable for that release) | The obfuscation gate. It reads the artifact: map under `BUNDLE-METADATA/…obfuscation` → fine; otherwise count short class descriptors in `base/dex/*.dex`. Never answer this from the build config |
+| Splash screen is three grey circles on a grid | Expo's placeholder. Without `expo-splash-screen` installed **and** configured, prebuild still generates the splash theme and falls back to the logo inside `@expo/prebuild-config`. Nothing errors | Install `expo-splash-screen` and set `image` in its plugin config. The legacy top-level `"splash"` key was removed from the SDK 57 schema — setting it does nothing |
 
 ## Verify Before Claiming Success
 

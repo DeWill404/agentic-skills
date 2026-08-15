@@ -157,6 +157,38 @@ else
   fi
 fi
 
+# ------------------------------------------------------------- obfuscation
+# Play warns "There is no deobfuscation file associated with this App Bundle"
+# on every bundle lacking a mapping, and cannot tell the two cases apart:
+#
+#   R8 never ran            -> benign. This is the DEFAULT for Expo and React
+#                              Native (`android.enableMinifyInReleaseBuilds`
+#                              is unset), so most users meet this warning on
+#                              their first upload with no way to judge it.
+#   R8 ran, map not shipped -> serious, and permanent for that release. Every
+#                              crash and ANR arrives as single-letter class
+#                              names.
+#
+# The bundle separates them without consulting the build config: AGP embeds the
+# map under BUNDLE-METADATA when R8 runs, and obfuscated code leaves short class
+# descriptors (La;, Lb/c;) in the dex where readable code leaves none.
+if grep -q 'BUNDLE-METADATA/com\.android\.tools\.build\.obfuscation' <<<"$LISTING"; then
+  pass "deobfuscation map embedded - Play will symbolicate crash reports"
+elif ! command -v strings >/dev/null 2>&1; then
+  skip "obfuscation check (\`strings\` unavailable) - no map embedded, which is benign only if R8 is off"
+else
+  DEXDIR=$(mktemp -d)
+  unzip -o -q "$AAB" 'base/dex/*.dex' -d "$DEXDIR" 2>/dev/null
+  SHORT=$(cat "$DEXDIR"/base/dex/*.dex 2>/dev/null | strings -a \
+          | grep -cE '^L[a-z]{1,2}(/[a-z]{1,2})*;$')
+  rm -rf "$DEXDIR"
+  if [ "${SHORT:-0}" -gt 50 ]; then
+    fail "obfuscated ($SHORT minified class names) but no mapping embedded - crash reports will be unreadable. Upload android/app/build/outputs/mapping/release/mapping.txt against this release in Play Console"
+  else
+    pass "not obfuscated (R8 off) - Play's \"no deobfuscation file\" warning is expected and can be ignored"
+  fi
+fi
+
 # AD_ID is called out separately because it is the one permission confirmed to
 # pull a declaration requirement onto the internal testing track.
 if grep -q 'com\.google\.android\.gms\.permission\.AD_ID' <<<"$MANIFEST"; then

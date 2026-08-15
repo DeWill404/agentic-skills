@@ -89,6 +89,19 @@ Save → Review release → Start rollout.
 Live in minutes; no review queue on this track. Do not run `verify.sh` after
 this — run it *before*, and only reach this step on a clean pass.
 
+**Expect one warning here on a default Expo/RN build:** *"There is no
+deobfuscation file associated with this App Bundle."* It is non-blocking, and
+`verify.sh` has already settled whether it matters — the obfuscation gate says
+either "not obfuscated (R8 off) … can be ignored" or fails the build outright.
+Report the gate's verdict rather than re-reasoning about the warning, and do not
+suggest enabling R8 to make it go away: minification without keep-rules breaks
+reflection-based React Native libraries, and release-only crashes are the worst
+thing to introduce at the moment of shipping.
+
+**Play App Signing may already be enrolled** rather than prompted for — the
+release screen shows it as *"Releases are signed by Google Play"* under
+enhancements. If so, Step D is done; do not go looking for a prompt.
+
 ### Step F — Testers
 **Goal:** named people can install, and get updates automatically.
 **Hint:** Internal testing → Testers tab → Create email list → paste addresses →
