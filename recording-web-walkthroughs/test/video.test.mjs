@@ -1,0 +1,59 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { makeWalkthrough } from '../lib/engine.mjs';
+
+const exec = promisify(execFile);
+export const APP = pathToFileURL(
+  path.join(import.meta.dirname, 'fixtures', 'red-app.html')).href;
+
+/**
+ * Average luma of one frame, optionally of one cropped region.
+ * This is how a test sees a picture: every region of the fixture sits far
+ * enough apart in luma that a threshold says which one is on screen.
+ */
+export async function luma(file, t, crop) {
+  const vf = [crop, 'signalstats', 'metadata=print:key=lavfi.signalstats.YAVG']
+    .filter(Boolean).join(',');
+  const { stderr } = await exec('ffmpeg',
+    ['-v', 'info', '-ss', String(t), '-i', file, '-frames:v', '1', '-vf', vf, '-f', 'null', '-'],
+    { maxBuffer: 64 << 20 });
+  const m = stderr.match(/YAVG=([\d.]+)/);
+  if (!m) throw new Error(`no YAVG for ${file} at ${t}s`);
+  return parseFloat(m[1]);
+}
+
+export function workspace() {
+  const dir = mkdtempSync(path.join(tmpdir(), 'wt-'));
+  return { dir, out: path.join(dir, 'out.mp4'), opts: { workDir: path.join(dir, '.w') } };
+}
+
+test('setup time does not shift the finished video', async () => {
+  const { dir, out, opts } = workspace();
+  try {
+    await makeWalkthrough({
+      config: { viewport: { width: 320, height: 200 }, captions: false },
+      // 3s of recorded footage that the viewer must never see.
+      setup: async ({ ui, page }) => {
+        await page.waitForTimeout(3000);
+        await ui.goto(APP, '#panel');
+      },
+      steps: [
+        { id: 'one', say: 'The panel is already on screen.', run: async ({ ui }) => ui.wait(200) },
+        { id: 'two', say: 'And it stays there.', run: async ({ ui }) => ui.wait(200) },
+      ],
+    }, { out, ...opts });
+
+    // The pre-navigation page is near white (about 235). The app is red with a
+    // white panel and a green footer, which averages well under 150.
+    assert.ok(await luma(out, 0.2) < 150, 'first frame is the blank pre-setup page');
+    assert.ok(await luma(out, 1.5) < 150, 'a later frame is the blank pre-setup page');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

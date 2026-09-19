@@ -45,6 +45,12 @@ export const DEFAULTS = {
   titleBg: '#0b0d10',
   accent: '#e5484d',      // badge chip, click ripple, highlight ring
   titleMs: 2500,          // how long the title card is held
+  // Playwright's screencast starts with the page, and starts this long after
+  // newPage() resolves. Measured over three runs on macOS/chromium: 0.103,
+  // 0.125 and 0.136s, with no drift across 12s. It is a property of the
+  // screencast, not a constant of nature, so tune it if your first frames
+  // land late or early.
+  videoLeadIn: 0.12,
   keepIntermediates: false,
 };
 
@@ -146,14 +152,19 @@ export async function record(storyboard, clips, dir, cfg) {
     ...(storyboard.contextOptions || {}),
   });
   const page = await context.newPage();
+  // Playwright's video starts with the page, not with the first step. Every
+  // trim offset in compose() is measured from here. Anchoring it any later,
+  // after setup for instance, shifts the whole film earlier by however long
+  // setup took: a storyboard whose setup logs in for 4s then produced a video
+  // that was the blank pre-navigation page from first frame to last.
+  const videoT0 = Date.now();
 
   let cursor = { x: cfg.viewport.width / 2, y: cfg.viewport.height / 2 };
   const segments = [];
-  let t0 = null;
   let stepBegan = 0;
   let currentStep = null;
   const pinned = new Set(); // steps using ui.at() — must not be retimed
-  const now = () => (Date.now() - t0) / 1000;
+  const now = () => Math.max(0, (Date.now() - videoT0) / 1000 - cfg.videoLeadIn);
 
   const ensureOverlay = () => page.evaluate(overlayScript, {
     x: cursor.x, y: cursor.y, moveMs: cfg.moveMs,
@@ -320,7 +331,6 @@ export async function record(storyboard, clips, dir, cfg) {
 
   if (storyboard.setup) await storyboard.setup({ ui, page, context });
 
-  t0 = Date.now();
   for (const step of storyboard.steps) {
     const start = now();
     currentStep = step.id;
