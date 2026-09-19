@@ -16,6 +16,7 @@
 // is stretched or compressed to meet the voice.
 
 import { chromium, firefox, webkit } from 'playwright';
+import { buildCards } from './cards.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdirSync, rmSync, writeFileSync, readdirSync } from 'node:fs';
@@ -100,19 +101,7 @@ export async function speak(steps, dir, cfg) {
 
 // Injected into the page. Headless browsers paint no pointer, so we draw one.
 // The CSS transition does the tweening — we only ever set a destination.
-function overlayScript({ x, y, moveMs, cursor, captions }) {
-  if (captions && !document.getElementById('__wt_cap')) {
-    const cap = document.createElement('div');
-    cap.id = '__wt_cap';
-    cap.style.cssText = [
-      'position:fixed', 'left:0', 'right:0', 'bottom:0', 'z-index:2147483646',
-      'background:#111', 'color:#fff', 'padding:10px 18px',
-      'font:500 15px/1.4 ui-sans-serif,system-ui,-apple-system,sans-serif',
-      'display:flex', 'gap:12px', 'align-items:center',
-      'pointer-events:none', 'letter-spacing:.2px',
-    ].join(';');
-    document.body.appendChild(cap);
-  }
+function overlayScript({ x, y, moveMs, cursor }) {
   if (cursor && !document.getElementById('__wt_cur')) {
     const cur = document.createElement('div');
     cur.id = '__wt_cur';
@@ -163,12 +152,13 @@ export async function record(storyboard, clips, dir, cfg) {
   const segments = [];
   let stepBegan = 0;
   let currentStep = null;
+  let warnedLift = false;
+  const captions = {}; // { [stepId]: { text, badge } } -> one strip per chunk
   const pinned = new Set(); // steps using ui.at() — must not be retimed
   const now = () => Math.max(0, (Date.now() - videoT0) / 1000 - cfg.videoLeadIn);
 
   const ensureOverlay = () => page.evaluate(overlayScript, {
-    x: cursor.x, y: cursor.y, moveMs: cfg.moveMs,
-    cursor: cfg.cursor, captions: cfg.captions,
+    x: cursor.x, y: cursor.y, moveMs: cfg.moveMs, cursor: cfg.cursor,
   }).catch(() => {});
 
   const ui = {
@@ -198,24 +188,21 @@ export async function record(storyboard, clips, dir, cfg) {
       if (left > 0) await page.waitForTimeout(left);
     },
 
-    /** Raise fixed bottom-anchored UI above the caption bar. */
-    async liftAboveCaption(selector, px = 96) {
-      if (!cfg.captions) return;
-      await page.addStyleTag({ content: `${selector}{bottom:${px}px !important}` });
+    /** @deprecated captions are composited below the picture, nothing is covered. */
+    async liftAboveCaption() {
+      if (warnedLift) return;
+      warnedLift = true;
+      console.warn('ui.liftAboveCaption() is now a no-op: captions sit below the picture');
     },
 
+    /**
+     * Set this chunk's caption. The strip is composited into the finished
+     * frame below the picture, so there is one per chunk and the last call
+     * wins. To change the words part way through, split the step in two.
+     */
     async caption(text, badge = '') {
-      if (!cfg.captions) return;
-      await ensureOverlay();
-      await page.evaluate(([text, badge]) => {
-        const el = document.getElementById('__wt_cap');
-        if (!el) return;
-        el.innerHTML =
-          (badge
-            ? `<span style="background:#e5484d;color:#fff;padding:2px 8px;`
-              + `font:600 12px ui-monospace,monospace">${badge}</span>`
-            : '') + `<span>${text}</span>`;
-      }, [text, badge]);
+      if (!cfg.captions || !currentStep) return;
+      captions[currentStep] = { text, badge };
     },
 
     /** Glide the drawn cursor and the real mouse to a point. */
@@ -334,7 +321,7 @@ export async function record(storyboard, clips, dir, cfg) {
   for (const step of storyboard.steps) {
     const start = now();
     currentStep = step.id;
-    await ui.caption(step.caption ?? '', step.badge ?? '');
+    if (cfg.captions) captions[step.id] = { text: step.caption ?? '', badge: step.badge ?? '' };
     stepBegan = Date.now();
 
     await step.run?.({ ui, page, context });
@@ -355,7 +342,7 @@ export async function record(storyboard, clips, dir, cfg) {
 
   const file = readdirSync(dir).find((f) => f.endsWith('.webm'));
   if (!file) throw new Error('playwright produced no video — did the context close?');
-  return { video: path.join(dir, file), segments };
+  return { video: path.join(dir, file), segments, captions };
 }
 
 /* ------------------------------------------------------- pass 3: compose */
@@ -367,10 +354,21 @@ export async function record(storyboard, clips, dir, cfg) {
  * Because segment i of both tracks is built to the same length, sync holds by
  * construction — no offsets, no drift, no lead-in correction.
  */
-export async function compose({ video, segments }, clips, dir, cfg, outFile) {
+export async function compose({ video, segments }, clips, cards, dir, cfg, outFile) {
   mkdirSync(dir, { recursive: true });
   const total = await probeDuration(video);
   const report = [];
+
+  const W = cfg.viewport.width;
+  const H = cfg.viewport.height;
+  const capH = cfg.captions ? cfg.captionHeight : 0;
+  const outH = H + capH;
+
+  const silence = (seconds, file) => sh('ffmpeg', [
+    '-y', '-loglevel', 'error',
+    '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
+    '-t', seconds.toFixed(3), '-c:a', 'aac', '-b:a', '128k', file,
+  ]);
 
   const vList = [];
   const aList = [];
@@ -405,19 +403,29 @@ export async function compose({ video, segments }, clips, dir, cfg, outFile) {
       ...(padDur > 0.01
         ? [`tpad=stop_mode=clone:stop_duration=${padDur.toFixed(3)}`]
         : []),
-      `scale=${cfg.viewport.width}:${cfg.viewport.height}:flags=lanczos`,
-      'format=yuv420p',
+      `scale=${W}:${H}:flags=lanczos`,
     ].join(',');
 
-    const vSeg = path.join(dir, `v${String(i).padStart(3, '0')}.mp4`);
-    await sh('ffmpeg', [
-      '-y', '-loglevel', 'error',
-      '-i', video,
-      '-vf', chain,
-      '-an', '-r', String(cfg.fps),
-      '-c:v', 'libx264', '-preset', 'medium', '-crf', String(cfg.crf),
-      vSeg,
-    ]);
+    const vSeg = path.join(dir, `v${String(i + 1).padStart(3, '0')}.mp4`);
+    const args = ['-y', '-loglevel', 'error', '-i', video];
+    if (capH) {
+      // The caption goes in a strip added BELOW the picture, so nothing the
+      // application draws can ever be covered by it.
+      const base = `[0:v]${chain},pad=${W}:${outH}:0:0:color=${cfg.captionBg}`;
+      const strip = cards.captions[seg.id];
+      if (strip) {
+        args.push('-i', strip, '-filter_complex',
+          `${base}[bg];[bg][1:v]overlay=0:${H}:format=auto,format=yuv420p[v]`,
+          '-map', '[v]');
+      } else {
+        args.push('-filter_complex', `${base},format=yuv420p[v]`, '-map', '[v]');
+      }
+    } else {
+      args.push('-vf', `${chain},format=yuv420p`);
+    }
+    args.push('-an', '-r', String(cfg.fps),
+      '-c:v', 'libx264', '-preset', 'medium', '-crf', String(cfg.crf), vSeg);
+    await sh('ffmpeg', args);
     const vActual = await probeDuration(vSeg);
 
     // Build the matching audio segment at exactly the video segment's length:
@@ -432,12 +440,7 @@ export async function compose({ video, segments }, clips, dir, cfg, outFile) {
         aSeg,
       ]);
     } else {
-      await sh('ffmpeg', [
-        '-y', '-loglevel', 'error',
-        '-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100',
-        '-t', vActual.toFixed(3), '-c:a', 'aac', '-b:a', '128k',
-        aSeg,
-      ]);
+      await silence(vActual, aSeg);
     }
 
     vList.push(vSeg);
@@ -485,9 +488,9 @@ export async function compose({ video, segments }, clips, dir, cfg, outFile) {
 /* ----------------------------------------------------------- verification */
 
 /** Prove the artefact is real: streams present, lengths agree, audio audible. */
-export async function verify(outFile) {
+export async function verify(outFile, expect = {}) {
   const streams = await sh('ffprobe', [
-    '-v', 'error', '-show_entries', 'stream=codec_type,codec_name,duration',
+    '-v', 'error', '-show_entries', 'stream=codec_type,codec_name,duration,width,height',
     '-of', 'json', outFile,
   ]);
   const { streams: s } = JSON.parse(streams);
@@ -510,10 +513,14 @@ export async function verify(outFile) {
     const drift = Math.abs(parseFloat(v.duration) - parseFloat(a.duration));
     if (drift > 0.5) problems.push(`video/audio length differ by ${drift.toFixed(2)}s`);
   }
+  if (v && expect.width && (v.width !== expect.width || v.height !== expect.height)) {
+    problems.push(`frame is ${v.width}x${v.height}, expected ${expect.width}x${expect.height}`);
+  }
   if (mean !== null && parseFloat(mean) < -50) problems.push(`audio near silent (${mean} dB)`);
 
   return {
     duration: v ? +parseFloat(v.duration).toFixed(2) : null,
+    width: v?.width, height: v?.height,
     video: v?.codec_name, audio: a?.codec_name,
     meanVolume: mean, peakVolume: peak, problems,
   };
@@ -536,7 +543,8 @@ export async function makeWalkthrough(storyboard, options = {}) {
   const rec = await record(storyboard, clips, path.join(work, 'raw'), cfg);
   console.log(`recorded: ${(await probeDuration(rec.video)).toFixed(1)}s, ${rec.segments.length} segments`);
 
-  const { report } = await compose(rec, clips, path.join(work, 'seg'), cfg, out);
+  const cards = await buildCards(storyboard, rec.captions, path.join(work, 'cards'), cfg);
+  const { report } = await compose(rec, clips, cards, path.join(work, 'seg'), cfg, out);
   const clamped = report.filter((r) => r.clamped);
   const cut = report.filter((r) => r.truncated);
   console.table(report);
@@ -562,7 +570,10 @@ export async function makeWalkthrough(storyboard, options = {}) {
     );
   }
 
-  const v = await verify(out);
+  const v = await verify(out, {
+    width: cfg.viewport.width,
+    height: cfg.viewport.height + (cfg.captions ? cfg.captionHeight : 0),
+  });
   console.log(v.problems.length ? `PROBLEMS: ${v.problems.join('; ')}` : 'verified: streams present, lengths agree, audio audible');
   console.log(`TOTAL ${v.duration}s  ${out}  ${v.video}/${v.audio}  mean ${v.meanVolume} dB`);
 

@@ -57,3 +57,27 @@ test('setup time does not shift the finished video', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('the caption strip sits below the picture, never over it', async () => {
+  const { dir, out, opts } = workspace();
+  try {
+    const res = await makeWalkthrough({
+      config: { viewport: { width: 320, height: 200 } },
+      setup: async ({ ui }) => { await ui.goto(APP, '#panel'); },
+      steps: [
+        { id: 'one', badge: '1 / 1', caption: 'a caption long enough to wrap onto a second line',
+          say: 'The footer stays visible.', run: async ({ ui }) => ui.wait(200) },
+      ],
+    }, { out, ...opts });
+
+    assert.equal(res.verify.width, 320);
+    assert.equal(res.verify.height, 272, 'frame should grow by captionHeight');
+    // The app keeps all 200 of its rows: the green footer occupies the bottom
+    // 40 of them and must still be green, not covered by a caption bar.
+    assert.ok(await luma(out, 0.6, 'crop=320:30:0:165') > 120, 'the footer was covered');
+    // The strip below the picture is the dark caption bar.
+    assert.ok(await luma(out, 0.6, 'crop=320:72:0:200') < 60, 'no caption strip below the picture');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
