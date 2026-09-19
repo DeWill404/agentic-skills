@@ -1,4 +1,4 @@
-// Example storyboard — records a narrated walkthrough of example/demo-app.html.
+// Example storyboard: records a narrated walkthrough of example/demo-app.html.
 //
 //   node run.mjs example/demo.storyboard.mjs --out example/demo.mp4
 //
@@ -10,6 +10,9 @@ import { pathToFileURL } from 'node:url';
 const APP = pathToFileURL(path.join(import.meta.dirname, 'demo-app.html')).href;
 
 export default {
+  title: 'Orbit',
+  subtitle: 'filtering and creating issues',
+
   config: {
     viewport: { width: 1280, height: 800 },
     // Acronyms are spelled phonetically for TTS: `say` reads "CSV" as a word
@@ -18,14 +21,22 @@ export default {
     rate: 190,
   },
 
+  // Navigating here costs zero video seconds, so the recording opens on a
+  // loaded application instead of on a blank page.
+  setup: async ({ ui }) => {
+    await ui.goto(APP, 'table');
+  },
+
   steps: [
     {
       id: 'intro',
       badge: '1 / 5',
-      caption: 'Orbit — every open issue in the workspace',
+      caption: 'Orbit: every open issue in the workspace',
       say: 'Orbit lists every open issue across the workspace.',
       run: async ({ ui }) => {
-        await ui.goto(APP, 'table');
+        await ui.highlight('table');
+        await ui.wait(400);
+        await ui.clearHighlight();
       },
     },
     {
