@@ -106,3 +106,36 @@ test('the video opens on the title card', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('highlight darkens the page but not the target', async () => {
+  const { dir, out, opts } = workspace();
+  try {
+    const res = await makeWalkthrough({
+      config: { viewport: { width: 320, height: 200 } },
+      setup: async ({ ui }) => { await ui.goto(APP, '#panel'); },
+      steps: [
+        { id: 'plain', caption: 'no highlight', say: 'This is the whole page.',
+          run: async ({ ui }) => ui.wait(200) },
+        { id: 'lit', caption: 'highlighted', say: 'Now only the panel matters here.',
+          run: async ({ ui }) => { await ui.highlight('#panel'); } },
+      ],
+    }, { out, ...opts });
+
+    const at = (id) => res.report.find((r) => r.id === id).startsAt;
+    // Both crops must stay clear of the highlight box itself, which rings the
+    // panel with 8px of padding: inside the ring nothing is dimmed, which is
+    // the point of it.
+    const away = 'crop=60:40:250:100'; // red body, clear of the panel and footer
+    const inside = 'crop=80:40:50:50'; // inside the white panel
+
+    const plainAway = await luma(out, at('plain') + 0.3, away);
+    const litAway = await luma(out, at('lit') + 1.0, away);
+    assert.ok(litAway < plainAway - 15,
+      `the rest of the page was not dimmed (${plainAway} -> ${litAway})`);
+
+    const litInside = await luma(out, at('lit') + 1.0, inside);
+    assert.ok(litInside > 200, `the target was dimmed too (${litInside})`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

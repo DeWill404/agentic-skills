@@ -46,6 +46,7 @@ export const DEFAULTS = {
   titleBg: '#0b0d10',
   accent: '#e5484d',      // badge chip, click ripple, highlight ring
   titleMs: 2500,          // how long the title card is held
+  highlightMs: 340,       // glide of the highlight box, and the settle after it
   // Playwright's screencast starts with the page, and starts this long after
   // newPage() resolves. Measured over three runs on macOS/chromium: 0.103,
   // 0.125 and 0.136s, with no drift across 12s. It is a property of the
@@ -260,6 +261,51 @@ export async function record(storyboard, clips, dir, cfg) {
       await page.waitForTimeout(cfg.scrollMs);
     },
 
+    /**
+     * Darken everything except one element and ring it, so the viewer looks
+     * where the narration is pointing.
+     *
+     * Calling it again moves the same box, which glides to the new target.
+     * There is no automatic clearing: clearing at a step boundary would either
+     * show undimmed frames at the tail of the step that needed the highlight,
+     * or flash when the next step puts it straight back. Call clearHighlight()
+     * when you are done with it. Navigation drops it, like every overlay here.
+     */
+    async highlight(selector, opts = {}) {
+      const loc = typeof selector === 'string' ? page.locator(selector).first() : selector;
+      await loc.waitFor({ state: 'visible' });
+      await ui.reveal(loc);
+      const box = await loc.boundingBox();
+      if (!box) throw new Error(`no bounding box for ${selector}`);
+      const o = { pad: 8, radius: 8, color: cfg.accent, dim: 0.55, ...opts };
+      await page.evaluate(([box, o, ms]) => {
+        let el = document.getElementById('__wt_hl');
+        if (!el) {
+          el = document.createElement('div');
+          el.id = '__wt_hl';
+          el.style.cssText = 'position:fixed;z-index:2147483644;pointer-events:none;'
+            + `transition:all ${ms}ms cubic-bezier(.4,0,.2,1)`;
+          document.body.appendChild(el);
+        }
+        el.style.left = `${box.x - o.pad}px`;
+        el.style.top = `${box.y - o.pad}px`;
+        el.style.width = `${box.width + o.pad * 2}px`;
+        el.style.height = `${box.height + o.pad * 2}px`;
+        el.style.border = `3px solid ${o.color}`;
+        el.style.borderRadius = `${o.radius}px`;
+        // One declaration does the dimming: a 9999px shadow spread covers the
+        // rest of the viewport whatever its size, with no cut-out to compute
+        // and nothing to keep in step when the box moves.
+        el.style.boxShadow = `0 0 0 9999px rgba(8,10,14,${o.dim})`;
+      }, [box, o, cfg.highlightMs]);
+      await page.waitForTimeout(cfg.highlightMs);
+    },
+
+    /** Drop the highlight and undim the page. */
+    async clearHighlight() {
+      await page.evaluate(() => document.getElementById('__wt_hl')?.remove());
+    },
+
     /** Move to an element and click it, visibly. */
     async click(selector, opts = {}) {
       const loc = typeof selector === 'string' ? page.locator(selector).first() : selector;
@@ -316,29 +362,33 @@ export async function record(storyboard, clips, dir, cfg) {
     },
   };
 
-  if (storyboard.setup) await storyboard.setup({ ui, page, context });
+  try {
+    if (storyboard.setup) await storyboard.setup({ ui, page, context });
 
-  for (const step of storyboard.steps) {
-    const start = now();
-    currentStep = step.id;
-    if (cfg.captions) captions[step.id] = { text: step.caption ?? '', badge: step.badge ?? '' };
-    stepBegan = Date.now();
+    for (const step of storyboard.steps) {
+      const start = now();
+      currentStep = step.id;
+      if (cfg.captions) captions[step.id] = { text: step.caption ?? '', badge: step.badge ?? '' };
+      stepBegan = Date.now();
 
-    await step.run?.({ ui, page, context });
+      await step.run?.({ ui, page, context });
 
-    // Coarse pacing: hold the step until its line has finished speaking.
-    // compose() then trims the residual mismatch exactly.
-    const target = (clips[step.id]?.duration ?? 0) * 1000 + cfg.tailMs;
-    const spent = Date.now() - stepBegan;
-    if (spent < target) await page.waitForTimeout(target - spent);
+      // Coarse pacing: hold the step until its line has finished speaking.
+      // compose() then trims the residual mismatch exactly.
+      const target = (clips[step.id]?.duration ?? 0) * 1000 + cfg.tailMs;
+      const spent = Date.now() - stepBegan;
+      if (spent < target) await page.waitForTimeout(target - spent);
 
-    segments.push({ id: step.id, start, end: now(), pinned: pinned.has(step.id) });
+      segments.push({ id: step.id, start, end: now(), pinned: pinned.has(step.id) });
+    }
+
+    if (storyboard.teardown) await storyboard.teardown({ ui, page, context });
+  } finally {
+    // A throw anywhere above would otherwise leave chromium running and the
+    // process hanging on it, with the storyboard's own error never surfacing.
+    await context.close().catch(() => {});
+    await browser.close().catch(() => {});
   }
-
-  if (storyboard.teardown) await storyboard.teardown({ ui, page, context });
-
-  await context.close();
-  await browser.close();
 
   const file = readdirSync(dir).find((f) => f.endsWith('.webm'));
   if (!file) throw new Error('playwright produced no video — did the context close?');
