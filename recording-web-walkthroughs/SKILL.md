@@ -39,8 +39,10 @@ A storyboard is a list of steps. Copy `example/demo.storyboard.mjs` and change t
 
 ```js
 export default {
+  title: 'Orbit',                         // title card, held 2.5s before step 1
+  subtitle: 'filtering and creating issues',
   config: { viewport: { width: 1280, height: 800 }, voice: 'Samantha', rate: 190 },
-  setup: async ({ ui }) => { /* log in once, seed data */ },
+  setup: async ({ ui }) => { /* log in, seed data, then navigate */ },
   steps: [
     {
       id: 'filter',                       // unique; names the chunk
@@ -65,15 +67,33 @@ export default {
 | `ui.choose(sel, value)` | Native `<select>` (see limits) |
 | `ui.goto(url, waitSel)` | Navigate, settle on a selector |
 | `ui.scrollBy(dy)` / `ui.reveal(loc)` | Smooth scroll |
-| `ui.caption(text, badge)` | Change the caption mid-step |
+| `ui.caption(text, badge)` | Set this chunk's caption |
+| `ui.highlight(sel)` | Ring an element and darken the rest of the page |
+| `ui.clearHighlight()` | Undim |
 | `ui.at(seconds)` | Hold until N seconds **into this step** — see Timing Within a Step |
-| `ui.liftAboveCaption(sel)` | Push fixed bottom-anchored UI above the caption bar |
 | `ui.moveTo(x, y)` / `ui.ripple()` | Park the cursor / flash a click ring manually |
 | `ui.wait(ms)` / `ui.page` | Hold / the raw Playwright `Page` for anything unsupported |
+
+`ui.liftAboveCaption()` is a no-op kept so older storyboards still run. Captions no longer cover anything.
 
 `setup` runs **before** the recording clock starts, so logging in and navigating there costs zero video seconds. Put anything the viewer shouldn't watch in `setup`.
 
 `ui.choose` forwards to Playwright's `selectOption`, which matches an option's `value` **attribute** first and falls back to its visible text. `<option>Asia/Kolkata</option>` (no `value`) is matched by text; `ui.choose(sel, '')` selects the empty-value option, which is the usual "reset the filter".
+
+## Frame Geometry
+
+The application is recorded at the full viewport. The finished frame is
+`captionHeight` px taller than that, and the caption is composited into the
+strip below the picture, so nothing the app draws is ever covered. At the
+default 1280x800 viewport the output is 1280x872. Set `captions: false` to
+record at the viewport size with no strip.
+
+Text is rendered by the browser and composited as an image, because a stock
+ffmpeg is built without libfreetype and has no `drawtext` filter at all.
+
+`title` and `subtitle` on the storyboard add a 2.5s card before the first
+step. The card is generated rather than recorded, so nothing about page load
+can get into it. The printed report lists it as its own `title` row.
 
 ## Timing Within a Step
 
@@ -95,6 +115,8 @@ Every action in `run()` fires at the **top** of the chunk, while the narration p
 
 **The lifetime rule.** A transient element bounds its chunk's narration, and `ui.at()` cannot rescue you from breaking it. If a toast auto-hides after 1.5s and the line runs 4s, no offset works — the voice outlives the element either way. Read the app's actual timeout (`setTimeout(..., 1500)`), then keep that chunk's line shorter than it and move the rest into a following step.
 
+`ui.caption()` sets the caption for the chunk it is called in, and the last call wins. One chunk gets one strip, so to change the words part way through, split the step in two.
+
 Budget narration at roughly **2.5 words/second** at `rate: 190` — so ~50 words for a 20-second video. Measure your first run and adjust; the printed `narration` column is the truth.
 
 ## Pacing
@@ -114,7 +136,11 @@ Every row below is something that actually broke a real run.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| The success toast never appears — the very thing the demo exists to prove | The caption bar occupies the bottom strip, so bottom-anchored toasts, snackbars and sticky action bars sit *inside* its box. It is geometry, not just stacking | `ui.liftAboveCaption('#toast', 112)` in `setup` (repositions it; 96 is the bare minimum, ~112 reads as deliberate), or `captions: false` |
+| Every frame of the finished video is the blank pre-navigation page | Segment offsets were measured from a clock started after `setup`, while the video starts with the page | Fixed: the clock is anchored at `newPage()`. If frames land slightly early or late, tune `videoLeadIn` (measured at 0.12s here) |
+| `No such filter: 'drawtext'` | ffmpeg built without libfreetype | Do not burn text with ffmpeg. Render it in the browser and composite the PNG, as `lib/cards.mjs` does |
+| A card or caption renders in Times | A quoted font family inside a `style="..."` attribute closed the attribute and dropped the rest of the declaration | Put the rules in a `<style>` block |
+| The highlight stays on for the rest of the video | `ui.highlight()` never clears itself by design | `await ui.clearHighlight()` |
+| A storyboard error hangs the run and leaves chromium running | The browser was closed only on the happy path | Fixed: `record()` closes it from a `finally` |
 | The payoff gets clipped at the very end | The last segment is bounded by the recording's real length, which can fall slightly short of the logged clock | Put the payoff in its own step and add a short trailing step after it |
 | Transient UI gone before the voice mentions it | All actions fire at the top of the chunk; narration runs the chunk's full length | `await ui.at(seconds)` before the action |
 | No cursor anywhere in the video | Headless browsers paint no pointer | Inject one (the engine does); animate via CSS transition and step the real mouse alongside so `:hover` fires |
@@ -147,7 +173,7 @@ Then **look at it** before handing it over. The run prints a `startsAt` column g
 ffmpeg -ss 12.1 -i demo.mp4 -frames:v 1 frame.png
 ```
 
-Ask of each frame: **is the thing the narration claims happened actually visible?** Not "does the caption match" — a caption can agree with the narration while the result it describes is hidden behind the caption bar, already faded, or off-screen. Two defects survive a fully passing build:
+Ask of each frame: **is the thing the narration claims happened actually visible?** Not "does the caption match" — a caption can agree with the narration while the result it describes has already faded or is off-screen. Two defects survive a fully passing build:
 
 - a selector that matched the wrong element, so the voice describes one thing while another is shown
 - a result that was covered, or expired, before the frame it belongs in
@@ -168,6 +194,8 @@ Piper and Kokoro both run offline and beat `say`. Reach for them only if the sto
 
 - `run.mjs` — CLI (`--keep` leaves intermediates in `.walkthrough/` beside the output)
 - `lib/engine.mjs` — the three passes, `ui` helpers, verification
+- `lib/cards.mjs` — title card and caption strip rendering
+- `test/` — `npm test`, asserts the finished MP4 frame by frame
 - `example/demo-app.html` + `example/demo.storyboard.mjs` — working example, no network needed
 
 The example is a deliberately easy target: its dialog has no auto-dismiss, so it exercises none of the transient-UI problems above. Copy its structure, not its assumptions.
