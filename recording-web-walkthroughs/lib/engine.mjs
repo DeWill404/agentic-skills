@@ -39,6 +39,12 @@ export const DEFAULTS = {
   rate: 190,          // words per minute
   cursor: true,
   captions: true,
+  captionHeight: 72,      // px of letterbox added below the picture for captions
+  captionBg: '#111418',
+  captionFg: '#ffffff',
+  titleBg: '#0b0d10',
+  accent: '#e5484d',      // badge chip, click ripple, highlight ring
+  titleMs: 2500,          // how long the title card is held
   keepIntermediates: false,
 };
 
