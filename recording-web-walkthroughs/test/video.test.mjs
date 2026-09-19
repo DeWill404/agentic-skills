@@ -81,3 +81,28 @@ test('the caption strip sits below the picture, never over it', async () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('the video opens on the title card', async () => {
+  const { dir, out, opts } = workspace();
+  try {
+    const res = await makeWalkthrough({
+      title: 'Red panel',
+      subtitle: 'a one step tour',
+      config: { viewport: { width: 320, height: 200 } },
+      setup: async ({ ui }) => { await ui.goto(APP, '#panel'); },
+      steps: [
+        { id: 'one', caption: 'the panel', say: 'Here is the panel.',
+          run: async ({ ui }) => ui.wait(200) },
+      ],
+    }, { out, ...opts });
+
+    assert.equal(res.report[0].id, 'title');
+    assert.equal(res.report[0].startsAt, 0);
+    assert.ok(Math.abs(res.report[0].final - 2.5) < 0.2, `card ran ${res.report[0].final}s`);
+    // The card is near black. The app that follows is not.
+    assert.ok(await luma(out, 0.3) < 40, 'the video does not open on the title card');
+    assert.ok(await luma(out, res.report[1].startsAt + 0.3) > 40, 'the app never arrives');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

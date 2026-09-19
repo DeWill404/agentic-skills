@@ -374,6 +374,29 @@ export async function compose({ video, segments }, clips, cards, dir, cfg, outFi
   const aList = [];
   let cursorT = 0; // running start offset in the finished file
 
+  // The card is generated, never recorded, so no amount of page-load flicker
+  // can get into it and its length is exact.
+  if (cards.title) {
+    const tv = path.join(dir, 'v000-title.mp4');
+    const ta = path.join(dir, 'a000-title.m4a');
+    await sh('ffmpeg', [
+      '-y', '-loglevel', 'error',
+      '-loop', '1', '-t', (cfg.titleMs / 1000).toFixed(3), '-i', cards.title,
+      '-vf', `scale=${W}:${outH},format=yuv420p`,
+      '-r', String(cfg.fps),
+      '-c:v', 'libx264', '-preset', 'medium', '-crf', String(cfg.crf), tv,
+    ]);
+    const dur = await probeDuration(tv);
+    await silence(dur, ta);
+    vList.push(tv);
+    aList.push(ta);
+    report.push({
+      id: 'title', startsAt: 0, narration: 0, rawVideo: 0, speed: 1,
+      pinned: false, final: +dur.toFixed(2), truncated: false, clamped: false,
+    });
+    cursorT += dur; // so every startsAt below stays a truthful seek target
+  }
+
   for (const [i, seg] of segments.entries()) {
     const clip = clips[seg.id];
     const rawEnd = i === segments.length - 1 ? Math.min(seg.end, total) : seg.end;
