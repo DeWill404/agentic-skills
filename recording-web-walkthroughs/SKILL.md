@@ -130,6 +130,24 @@ To make the video **shorter**, shorten the narration — the picture follows the
 
 `speedClamp` (default `[0.5, 2.0]`) bounds how far a segment may be retimed. But speed is a *quality* problem long before it is a failure: above roughly **1.25×** the cursor visibly darts, and the run warns about it. Treat any such warning as "this step needs more narration or fewer actions", not as noise. If the clamp does stop the picture reaching the voice, the last frame is held — the narration is never cut off.
 
+## Cutting Long Waits
+
+A step stretches or squeezes to its narration, and the clamp is 0.5x-2x, so a five-minute job inside one step can never become a few seconds. Put the wait between two visible steps instead, as a `hidden` step. It runs its `run()` and creates no segment, no narration and no caption, and compose keeps only segment slices, so the wait is cut from the film.
+
+```js
+{ id: 'train-start', say: 'Start training.', run: async ({ ui }) => { await ui.click('text=Train'); } },
+{ id: 'train-wait', hidden: true, run: async ({ page }) => {
+    await page.getByText('Completed').waitFor({ timeout: 45 * 60_000 });
+} },
+{ id: 'train-done', say: 'Training has finished.', run: async ({ ui }) => { await ui.wait(2500); } },
+```
+
+Two rules from real runs. Put any loading skeleton in a hidden step too, or the visible step that follows it runs at the 2x clamp. And have the hidden step throw on a failed job, so a bad take stops instead of recording the failure.
+
+## Run Log and Failure Screenshots
+
+The engine prints `[hh:mm:ss] > id` when a step starts, `< id Ns` when it ends, and `! id failed after Ns: <first line>  screenshot: <path>` when it throws. On a failure it saves `fail-<id>.png` of the page, into `$WALKTHROUGH_SHOTS` or the working directory. Read that PNG first: a locator that timed out is usually a dialog still open or a page in a different state than the script assumed. A long take is worth running with output sent to a file, so the log can be watched.
+
 ## Non-Obvious Failures
 
 Every row below is something that actually broke a real run.

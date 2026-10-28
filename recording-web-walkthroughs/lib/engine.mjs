@@ -366,12 +366,18 @@ export async function record(storyboard, clips, dir, cfg) {
     if (storyboard.setup) await storyboard.setup({ ui, page, context });
 
     for (const step of storyboard.steps) {
+      // A hidden step runs (to wait out a long job) but is never a segment:
+      // compose() keeps only segment slices, so the wait is cut from the film.
+      if (step.hidden) {
+        await runLogged(step, page, () => step.run?.({ ui, page, context }));
+        continue;
+      }
       const start = now();
       currentStep = step.id;
       if (cfg.captions) captions[step.id] = { text: step.caption ?? '', badge: step.badge ?? '' };
       stepBegan = Date.now();
 
-      await step.run?.({ ui, page, context });
+      await runLogged(step, page, () => step.run?.({ ui, page, context }));
 
       // Coarse pacing: hold the step until its line has finished speaking.
       // compose() then trims the residual mismatch exactly.
@@ -393,6 +399,23 @@ export async function record(storyboard, clips, dir, cfg) {
   const file = readdirSync(dir).find((f) => f.endsWith('.webm'));
   if (!file) throw new Error('playwright produced no video — did the context close?');
   return { video: path.join(dir, file), segments, captions };
+}
+
+
+/** Timestamped step progress on stdout, and a screenshot of the page when a step throws. */
+async function runLogged(step, page, fn) {
+  const t0 = Date.now();
+  const stamp = () => new Date().toISOString().slice(11, 19);
+  console.log(`[${stamp()}] > ${step.id}${step.hidden ? ' (hidden)' : ''}`);
+  try {
+    await fn();
+  } catch (err) {
+    const shot = path.join(process.env.WALKTHROUGH_SHOTS ?? '.', `fail-${step.id}.png`);
+    await page.screenshot({ path: shot }).catch(() => {});
+    console.log(`[${stamp()}] ! ${step.id} failed after ${((Date.now() - t0) / 1000).toFixed(1)}s: ${String(err.message).split('\n')[0]}  screenshot: ${shot}`);
+    throw err;
+  }
+  console.log(`[${stamp()}] < ${step.id} ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 }
 
 /* ------------------------------------------------------- pass 3: compose */
