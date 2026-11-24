@@ -16,11 +16,16 @@ agent-skills/
 │   ├── lib/engine.mjs            # narrate → record → compose
 │   ├── example/                  # runnable example, no network needed
 │   └── package.json              # dependencies scoped to this skill
-└── publishing-android-to-play/   # ship an Android app to Play internal testing
-    ├── SKILL.md                  # the detect → gate → step-loop protocol
-    ├── verify.sh                 # release gates, PASS/FAIL per line
-    ├── assets/                   # Expo config plugin for release signing
-    └── references/               # per-framework build paths, Console steps
+├── publishing-android-to-play/   # ship an Android app to Play internal testing
+│   ├── SKILL.md                  # the detect → gate → step-loop protocol
+│   ├── verify.sh                 # release gates, PASS/FAIL per line
+│   ├── assets/                   # Expo config plugin for release signing
+│   └── references/               # per-framework build paths, Console steps
+└── remote-input/                 # see and drive a Windows PC over the LAN
+    ├── SKILL.md                  # connect, screenshot, one action, screenshot loop
+    ├── server.py                 # runs on the Windows host: /screenshot and /act
+    ├── start.bat                 # starts server.py for the allowed controller IP
+    └── references/               # Windows host setup and security model
 ```
 
 `SKILL.md` frontmatter is the contract with the agent: `name` must match the directory, and
@@ -104,6 +109,29 @@ one.
   the gates and the Console half are already framework-agnostic — but shipping untested build paths
   as confident instructions is the exact failure this skill is built to avoid.
 - **Internal testing track.** Not production rollouts, staged releases, or the App Store.
+
+### `remote-input`
+
+Lets the agent see and control a Windows PC on the same LAN the way a person would: screenshot, move, click, drag, scroll, type, hotkeys. Built for debugging a web app in Chrome on a machine the agent is not running on, but any desktop app works.
+
+The Windows host runs `server.py`, which exposes exactly two endpoints: `GET /screenshot` (a PNG downscaled to 1568 px on the long edge) and `POST /act` (one mouse or keyboard action as JSON). Input goes through real OS events via `pyautogui`, so the browser sees ordinary trusted clicks and keys. No debugger, extension or browser automation is attached. All coordinates are in screenshot space; the server maps them to real pixels.
+
+```bash
+# on the Windows host, once: py -3 -m pip install --user pyautogui pillow
+start.bat                                   # prints URL and a fresh TOKEN
+# on the controller, inside the agent:
+/remote-input open http://localhost:3000 in Chrome and tell me what the console shows
+```
+
+See [`remote-input/references/windows-host.md`](remote-input/references/windows-host.md) for the firewall rule, network profile and security model.
+
+**Requirements and constraints**
+
+- **The token is full control of the Windows account.** Keyboard input reaches every app, including a terminal. The server limits who gets access and for how long, not what they can do once connected.
+- **Manual start, one client IP, short life.** No autostart; the IP is enforced by a firewall rule and inside the script; the server exits after 30 minutes or when the real mouse hits a screen corner.
+- **Plain HTTP.** Use it only on a network you trust.
+- **Primary monitor only, ASCII-only typing.** A locked screen gives black screenshots, and UAC prompts cannot be clicked remotely.
+- The skill's scope rules (no terminal, Run dialog, Settings, installers or UAC unless named in the task) are instructions the agent follows, not limits the server enforces.
 
 ## Adding a skill
 
